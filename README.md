@@ -2,6 +2,8 @@
 
 单文件（`index.html`）国际象棋对弈应用，与内置 AI 引擎对局。零依赖，双击即玩。
 
+**在线体验：<https://chess-web-ztu.pages.dev>**（Cloudflare Pages）
+
 ## 玩法
 
 - 点击棋子 → 点击目标格行棋；支持王车易位、吃过路兵、兵升变
