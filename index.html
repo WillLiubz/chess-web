@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web Chess — 复刻 macOS Chess / Sjeng 11.2</title>
+<style>
+  /* ============ 主题：复刻原版三套贴图（木纹/大理石/金属） ============ */
+  :root {
+    --bg: #2b2620;
+    --light: #f0d9b5;  /* 木材 */
+    --dark: #b58863;
+    --panel: #3a332b;
+    --panel-ink: #e8dfd2;
+    --accent: #cb7d4a;
+    --hl-last: rgba(205, 180, 90, .45);
+    --hl-sel: rgba(120, 190, 120, .55);
+    --hl-check: radial-gradient(circle, rgba(220,60,50,.85) 0%, rgba(220,60,50,.35) 55%, transparent 70%);
+  }
+  body.theme-marble {
+    --bg: #35383d; --light: #e9eaea; --dark: #9fa6ad; --panel: #43474e; --panel-ink: #e6e9ec; --accent: #6f8ab0;
+  }
+  body.theme-metal {
+    --bg: #1e2226; --light: #b9c2cb; --dark: #6d7d8c; --panel: #2a3036; --panel-ink: #d5dde4; --accent: #b08d3c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--panel-ink);
+    display: flex; justify-content: center; padding: 22px; min-height: 100vh;
+  }
+  .app { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+
+  /* ============ 棋盘 ============ */
+  .board-wrap { position: relative; }
+  .board {
+    display: grid; grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    width: min(78vh, 92vw, 640px); aspect-ratio: 1;
+    border: 8px solid #1c1813; border-radius: 6px;
+    box-shadow: 0 14px 40px rgba(0,0,0,.5);
+    user-select: none; touch-action: manipulation;
+  }
+  body.theme-marble .board { border-color: #2c3034; }
+  body.theme-metal .board { border-color: #14171a; }
+  .sq { position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .sq.light { background: var(--light); }
+  .sq.dark  { background: var(--dark); }
+  .sq .pc { font-size: min(9.5vh, 11vw, 68px); line-height: 1; z-index: 2;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); }
+  .pc.w { color: #fdfdf8; } .pc.b { color: #26221e; }
+  body.theme-metal .pc.w { color: #f2f5f8; text-shadow: 0 0 1px #98a4b0; }
+  body.theme-metal .pc.b { color: #10161c; text-shadow: 0 0 1px #4a5763; }
+  .sq.last::after { content: ""; position: absolute; inset: 0; background: var(--hl-last); }
+  .sq.sel::after  { content: ""; position: absolute; inset: 0; background: var(--hl-sel); }
+  .sq.check::before { content: ""; position: absolute; inset: 0; background: var(--hl-check); z-index: 1; }
+  .sq .dot { position: absolute; width: 26%; height: 26%; border-radius: 50%;
+             background: rgba(30,120,40,.45); z-index: 3; pointer-events: none; }
+  .sq .ring { position: absolute; inset: 6%; border-radius: 50%;
+              border: 4px solid rgba(200,40,30,.55); z-index: 3; pointer-events: none; }
+  .coord { position: absolute; font-size: 10px; font-weight: 600; opacity: .7; z-index: 4; }
+  .coord.file { right: 3px; bottom: 1px; } .coord.rank { left: 3px; top: 1px; }
+
+  /* ============ 侧栏 ============ */
+  .side { width: 340px; display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--panel); border-radius: 10px; padding: 14px 16px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  .card h3 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+  #status { font-size: 17px; font-weight: 700; }
+  .status-sub { font-size: 13px; color: var(--panel-ink); opacity: .8; margin-top: 4px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, select {
+    background: rgba(255,255,255,.08); color: var(--panel-ink);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 7px;
+    padding: 7px 12px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  button:hover { background: rgba(255,255,255,.16); }
+  button.primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+  button:disabled { opacity: .4; cursor: default; }
+  label { font-size: 12.5px; opacity: .85; }
+  .theme-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); padding: 0; }
+  .theme-dot.wood { background: linear-gradient(135deg,#f0d9b5,#b58863); }
+  .theme-dot.marble { background: linear-gradient(135deg,#f0f2f3,#98a0a8); }
+  .theme-dot.metal { background: linear-gradient(135deg,#c3ccd5,#5c6a78); }
+
+  /* 引擎控制台：复刻 sjeng.ChessEngine 的文本协议与统计输出 */
+  #console {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11.5px; line-height: 1.55;
+    background: #12140f; color: #b9e4a8;
+    border-radius: 8px; padding: 10px 12px; height: 190px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  #console .tx { color: #7fc97f; } #console .rx { color: #8ab8e8; } #console .st { color: #cfcfcf; }
+
+  #moves { font-size: 13px; max-height: 200px; overflow-y: auto; }
+  #moves table { width: 100%; border-collapse: collapse; }
+  #moves td { padding: 2.5px 6px; border-bottom: 1px solid rgba(255,255,255,.06); }
+  #moves td.no { color: var(--accent); font-weight: 700; width: 30px; }
+  footer { font-size: 11px; opacity: .55; line-height: 1.6; }
+
+  /* 教学弹层 */
+  .tut-overlay { position: fixed; inset: 0; background: rgba(8,6,4,.62); z-index: 50;
+                 display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .tut-box { background: var(--panel); color: var(--panel-ink); border-radius: 14px;
+             max-width: 680px; width: 100%; max-height: 86vh; overflow-y: auto;
+             padding: 24px 28px; box-shadow: 0 18px 60px rgba(0,0,0,.55); position: relative; }
+  .tut-box h2 { font-size: 20px; margin-bottom: 6px; color: var(--accent); }
+  .tut-box h3 { font-size: 15px; margin: 18px 0 8px; color: var(--accent); }
+  .tut-box p, .tut-box li { font-size: 13.5px; line-height: 1.78; }
+  .tut-box ul { margin: 4px 0 8px 20px; }
+  .tut-box table { background: transparent; border: none; margin: 6px 0 10px; }
+  .tut-box td { border-bottom: 1px solid rgba(255,255,255,.08); padding: 7px 10px; vertical-align: top; }
+  .tut-box td:first-child { text-align: center; white-space: nowrap; width: 40px; font-size: 24px; }
+  .tut-close { position: absolute; top: 14px; right: 14px; }
+  .sq.hint { box-shadow: inset 0 0 0 3px rgba(70,150,240,.95); }
+  .banner {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(10,8,6,.55); border-radius: 4px; z-index: 10; cursor: pointer;
+  }
+  .banner .msg { background: var(--panel); color: #fff; font-size: 24px; font-weight: 800;
+                 padding: 16px 34px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+
+  /* 升变选择弹层 */
+  .promo { position: absolute; inset: 0; background: rgba(0,0,0,.45); z-index: 20;
+           display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+  .promo .box { background: var(--panel); padding: 12px; border-radius: 12px; display: flex; gap: 8px; }
+  .promo button { font-size: 40px; line-height: 1; padding: 6px 10px; }
+</style>
+</head>
+<body>
+
+<!-- ================================================================
+     引擎层：复刻自逆向调查结论（见 ai_session_…/结案报告_国际象棋调查.md）
+     约定：64 格索引 0=a8（行优先）；mailbox120 索引 = 64 索引 + 21
+     · think()   = 迭代加深（对应引擎 main 中 clock() 计时段）
+     · ab()      = negamax alpha-beta + PVS 空窗侦察（对应 0x10000d670 的
+                   FUN(-beta,-alpha,…) 与 ~x 空窗调用）
+     · quiesce() = 静态搜索（qnodes 统计的原版行为）
+     · 置换表    = Zobrist 哈希（原版哈希含 XOR 0xdeadbeef 探测标记）
+     · evaluate()= 子力 + 子力位置表（DAT_10001f640 dump 出的中心 +15 /
+                   边角 -15/-20 棋感数值风格融入下表）
+     ================================================================ -->
+<script>
+/* ENGINE-BLOCK-START */
+const P=1,N=2,B=3,R=4,Q=5,K=6, OFF=7;
+const VALUE=[0,100,320,330,500,900,20000];
+const mailbox=[
+ -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+ -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+ -1, 0, 1, 2, 3, 4, 5, 6, 7,-1,   /* rank 8:  64 索引 0..7  → 21..28 */
+ -1, 8, 9,10,11,12,13,14,15,-1,   /* rank 7:  8..15  → 29..36（黑兵home）*/
+ -1,16,17,18,19,20,21,22,23,-1,
+ -1,24,25,26,27,28,29,30,31,-1,
+ -1,32,33,34,35,36,37,38,39,-1,
+ -1,40,41,42,43,44,45,46,47,-1,
+ -1,48,49,50,51,52,53,54,55,-1,   /* rank 2: 48..55 → 69..76（白兵home）*/
+ -1,56,57,58,59,60,61,62,63,-1,   /* rank 1: 56..63 → 77..84 */
+ -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+ -1,-1,-1,-1,-1,-1,-1,-1,-1,-1];
+const mailbox64=new Array(64), SQ64TO120=new Array(64);
+for(let i=0;i<64;i++){ const m=i+21+2*(i>>3); SQ64TO120[i]=m; mailbox64[m]=i; }
+/* 关键格（mailbox120 域，由 SQ64TO120 换算）：
+   e1=95 a1=91 h1=98 f1=96 g1=97 d1=94 c1=93 b1=92
+   e8=25 a8=21 h8=28 f8=26 g8=27 d8=24 c8=23 b8=22
+   白兵 home 81..88（rank2），黑兵 home 31..38（rank7）
+   升变行：白到 21..28（rank8），黑到 91..98（rank1）*/
+const N_OFF=[-21,-19,-12,-8,8,12,19,21];
+const B_OFF=[-11,-9,9,11], R_OFF=[-10,-1,1,10], K_OFF=[-11,-10,-9,-1,1,9,10,11];
+
+/* 子力位置表（0=a8 行优先；白方视角，黑方用 i^56 镜像。
+   中心奖励/边角惩罚的数值风格源自逆向 dump 的 DAT_10001f640） */
+const PST_P=[0,0,0,0,0,0,0,0, 50,50,50,50,50,50,50,50, 10,10,20,30,30,20,10,10,
+ 5,5,10,25,25,10,5,5, 0,0,0,20,20,0,0,0, 5,-5,-10,0,0,-10,-5,5,
+ 5,10,10,-20,-20,10,10,5, 0,0,0,0,0,0,0,0];
+const PST_N=[-50,-40,-30,-30,-30,-30,-40,-50, -40,-20,0,0,0,0,-20,-40, -30,0,15,20,20,15,0,-30,
+ -30,5,20,25,25,20,5,-30, -30,0,20,25,25,20,0,-30, -30,5,15,20,20,15,5,-30,
+ -40,-20,0,5,5,0,-20,-40, -50,-40,-30,-30,-30,-30,-40,-50];
+const PST_B=[-20,-10,-10,-10,-10,-10,-10,-20, -10,0,0,0,0,0,0,-10, -10,0,5,10,10,5,0,-10,
+ -10,5,5,10,10,5,5,-10, -10,0,10,10,10,10,0,-10, -10,10,10,10,10,10,10,-10,
+ -10,5,0,0,0,0,5,-10, -20,-10,-10,-10,-10,-10,-10,-20];
+const PST_R=[0,0,0,0,0,0,0,0, 5,10,10,10,10,10,10,5, -5,0,0,0,0,0,0,-5,
+ -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5,
+ -5,0,0,0,0,0,0,-5, 0,0,0,5,5,0,0,0];
+const PST_Q=[-20,-10,-10,-5,-5,-10,-10,-20, -10,0,0,0,0,0,0,-10, -10,0,5,5,5,5,0,-10,
+ -5,0,5,5,5,5,0,-5, 0,0,5,5,5,5,0,-5, -10,5,5,5,5,5,0,-10,
+ -10,0,5,0,0,0,0,-10, -20,-10,-10,-5,-5,-10,-10,-20];
+const PST_KM=[-30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30,
+ -30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30,
+ -20,-30,-30,-40,-40,-30,-30,-20, -10,-20,-20,-20,-20,-20,-20,-10,
+ 20,20,0,0,0,0,20,20, 20,30,10,0,0,10,30,20];
+const PST_KE=[-50,-40,-30,-20,-20,-30,-40,-50, -30,-20,-10,0,0,-10,-20,-30, -30,-10,20,30,30,20,-10,-30,
+ -30,-10,30,40,40,30,-10,-30, -30,-10,30,40,40,30,-10,-30, -30,-10,20,30,30,20,-10,-30,
+ -30,-30,0,0,0,0,-30,-30, -50,-30,-30,-30,-30,-30,-30,-50];
+const PSTS=[null,PST_P,PST_N,PST_B,PST_R,PST_Q,null];
+
+/* Zobrist */
+function rnd32(){ return (Math.random()*0x100000000)|0; }
+const Z_PIECE=[], Z_SIDE=rnd32(), Z_CASTLE=new Array(16), Z_EP=new Array(120);
+for(let p=0;p<12;p++){ Z_PIECE[p]=new Array(120); for(let s=0;s<120;s++) Z_PIECE[p][s]=rnd32(); }
+for(let i=0;i<16;i++) Z_CASTLE[i]=rnd32();
+for(let s=0;s<120;s++) Z_EP[s]=rnd32();
+function zIdx(pc){ return pc>0 ? pc-1 : 5-pc; } /* 白 0..5 黑 6..11 */
+
+function newPos(){
+  return { board:new Int8Array(120), side:1, castle:15, ep:-1, fifty:0, hash:0,
+           king:[-1,-1], hist:[] };
+}
+function sqName(m){ const i=mailbox64[m]; return "abcdefgh"[i%8]+(8-(i>>3)); }
+function nameSq(n){ const f=n.charCodeAt(0)-97, r=8-(n.charCodeAt(1)-48); return SQ64TO120[r*8+f]; }
+
+function loadFEN(fen){
+  const st=newPos(); st.board.fill(OFF);
+  for(let i=0;i<64;i++) st.board[SQ64TO120[i]]=0;
+  const parts=fen.trim().split(/\s+/), rows=parts[0].split("/");
+  for(let r=0;r<8;r++){ let f=0;
+    for(const ch of rows[r]){
+      if(ch>='1'&&ch<='8'){ f+=+ch; continue; }
+      const low=ch.toLowerCase(), pt="pnbrqk".indexOf(low)+1, color=ch===low?-1:1;
+      const m=SQ64TO120[r*8+f]; st.board[m]=pt*color;
+      if(pt===K) st.king[color===1?0:1]=m;
+      f++;
+    }}
+  st.side = parts[1]==='w'?1:-1;
+  st.castle=0;
+  if(parts[2]&&parts[2]!=='-') for(const c of parts[2])
+    st.castle |= c==='K'?1:c==='Q'?2:c==='k'?4:c==='q'?8:0;
+  st.ep = (parts[3]&&parts[3]!=='-') ? nameSq(parts[3]) : -1;
+  st.fifty = parts[4]?+parts[4]:0;
+  st.hash=computeHash(st);
+  return st;
+}
+function computeHash(st){
+  let h=0;
+  for(let m=0;m<120;m++){ const p=st.board[m]; if(p!==0&&p!==OFF) h^=Z_PIECE[zIdx(p)][m]; }
+  if(st.side===-1) h^=Z_SIDE;
+  h^=Z_CASTLE[st.castle];
+  if(st.ep>=0) h^=Z_EP[st.ep];
+  return h;
+}
+
+/* 走法打包：from | to<<7 | 终局棋子(绝对值 1..6)<<14 | 标志<<18
+   标志：1=过路兵 2=入堡 4=双步 8=升变 */
+const F_EP=1,F_CA=2,F_DP=4,F_PR=8;
+function mk(from,to,pcAbs,flags){ return from|(to<<7)|(pcAbs<<14)|(flags<<18); }
+function mFrom(m){ return m&127; } function mTo(m){ return (m>>7)&127; }
+function mPc(m){ return (m>>14)&7; } function mFl(m){ return (m>>18)&15; }
+function mStr(m){ return sqName(mFrom(m))+sqName(mTo(m))
+  + (mPc(m)!==P&&mFl(m)&F_PR ? "nbrq"[mPc(m)-2] : ""); }
+
+/* 某格是否被 bySide 攻击 */
+function attacked(st,sq,bySide){
+  const bd=st.board;
+  if(bySide===1){ if(bd[sq+9]===P||bd[sq+11]===P) return true; }
+  else { if(bd[sq-9]===-P||bd[sq-11]===-P) return true; }
+  for(const d of N_OFF){ if(bd[sq+d]===N*bySide) return true; }
+  for(const d of K_OFF){ if(bd[sq+d]===K*bySide) return true; }
+  for(const d of B_OFF){ let t=sq+d;
+    while(bd[t]===0) t+=d;
+    const p=bd[t]; if(p===B*bySide||p===Q*bySide) return true; }
+  for(const d of R_OFF){ let t=sq+d;
+    while(bd[t]===0) t+=d;
+    const p=bd[t]; if(p===R*bySide||p===Q*bySide) return true; }
+  return false;
+}
+function inCheck(st,side){ return attacked(st, side===1?st.king[0]:st.king[1], -side); }
+
+/* 伪合法走法生成（capsOnly=true 时只生成吃子/升变——静态搜索用） */
+function genMoves(st,capsOnly){
+  const mv=[], bd=st.board, side=st.side;
+  for(let i=0;i<64;i++){ const m=SQ64TO120[i], p=bd[m]; if(p===0||(p>0)!==(side>0)) continue;
+    const ap=p>0?p:-p;
+    if(ap===P){
+      const dir=side===1?-10:10, one=m+dir;
+      if(bd[one]===0){
+        const onLast = side===1 ? (one>=21&&one<=28) : (one>=91&&one<=98);
+        if(onLast){ for(const q of [Q,N,R,B]) mv.push(mk(m,one,q,F_PR)); }
+        else if(!capsOnly){
+          mv.push(mk(m,one,P,0));
+          const two=one+dir, home= side===1 ? (m>=81&&m<=88) : (m>=31&&m<=38);
+          if(home&&bd[two]===0) mv.push(mk(m,two,P,F_DP));
+        }
+      }
+      for(const dd of [dir-1,dir+1]){ const t=m+dd, tp=bd[t];
+        if(tp!==OFF&&tp!==0&&((tp>0)!==(side>0))){
+          const onLast = side===1 ? (t>=21&&t<=28) : (t>=91&&t<=98);
+          if(onLast){ for(const q of [Q,N,R,B]) mv.push(mk(m,t,q,F_PR)); }
+          else mv.push(mk(m,t,P,0));
+        } else if(t===st.ep && tp===0){ mv.push(mk(m,t,P,F_EP)); }
+      }
+      continue;
+    }
+    const offs = ap===N?N_OFF : ap===B?B_OFF : ap===R?R_OFF : K_OFF;
+    const slide = ap===B||ap===R||ap===Q;
+    for(const d of offs){ let t=m+d;
+      while(true){ const tp=bd[t];
+        if(tp===OFF||(tp!==0&&(tp>0)===(side>0))) break;
+        const isCap=tp!==0;
+        if(!capsOnly||isCap) mv.push(mk(m,t,ap,0));
+        if(!slide||isCap) break;
+        t+=d;
+      }}
+    if(ap===K&&!capsOnly){
+      if(side===1&&m===95){
+        if((st.castle&1)&&bd[96]===0&&bd[97]===0&&bd[98]===R
+           &&!attacked(st,95,-1)&&!attacked(st,96,-1)&&!attacked(st,97,-1)) mv.push(mk(95,97,K,F_CA));
+        if((st.castle&2)&&bd[94]===0&&bd[93]===0&&bd[92]===0&&bd[91]===R
+           &&!attacked(st,95,-1)&&!attacked(st,94,-1)&&!attacked(st,93,-1)) mv.push(mk(95,93,K,F_CA));
+      }
+      if(side===-1&&m===25){
+        if((st.castle&4)&&bd[26]===0&&bd[27]===0&&bd[28]===-R
+           &&!attacked(st,25,1)&&!attacked(st,26,1)&&!attacked(st,27,1)) mv.push(mk(25,27,K,F_CA));
+        if((st.castle&8)&&bd[24]===0&&bd[23]===0&&bd[22]===0&&bd[21]===-R
+           &&!attacked(st,25,1)&&!attacked(st,24,1)&&!attacked(st,23,1)) mv.push(mk(25,23,K,F_CA));
+      }
+    }
+  }
+  return mv;
+}
+
+function make(st,mv){
+  const bd=st.board, from=mFrom(mv), to=mTo(mv), pc=mPc(mv), fl=mFl(mv), side=st.side;
+  const cap= fl===F_EP ? (side===1? -P : P) : bd[to];
+  st.hist.push({mv,cap,castle:st.castle,ep:st.ep,fifty:st.fifty,hash:st.hash});
+  let h=st.hash;
+  h^=Z_CASTLE[st.castle]; if(st.ep>=0) h^=Z_EP[st.ep];
+  if(cap!==0&&cap!==OFF){ const cs= fl===F_EP ? (side===1? to+10 : to-10) : to;
+    h^=Z_PIECE[zIdx(cap)][cs]; bd[cs]=0; }
+  h^=Z_PIECE[zIdx(bd[from])][from]; bd[from]=0;
+  bd[to]=pc*side; h^=Z_PIECE[zIdx(pc*side)][to];
+  if(pc===K){ st.king[side===1?0:1]=to;
+    if(fl===F_CA){ if(to===97){ h^=Z_PIECE[zIdx(R)][98];bd[98]=0; h^=Z_PIECE[zIdx(R)][96];bd[96]=R; }
+                   if(to===93){ h^=Z_PIECE[zIdx(R)][91];bd[91]=0; h^=Z_PIECE[zIdx(R)][94];bd[94]=R; }
+                   if(to===27){ h^=Z_PIECE[zIdx(-R)][28];bd[28]=0; h^=Z_PIECE[zIdx(-R)][26];bd[26]=-R; }
+                   if(to===23){ h^=Z_PIECE[zIdx(-R)][21];bd[21]=0; h^=Z_PIECE[zIdx(-R)][24];bd[24]=-R; } } }
+  if(from===95||to===95) st.castle&=~3;
+  if(from===91||to===91) st.castle&=~2;
+  if(from===98||to===98) st.castle&=~1;
+  if(from===25||to===25) st.castle&=~12;
+  if(from===21||to===21) st.castle&=~8;
+  if(from===28||to===28) st.castle&=~4;
+  st.ep = fl===F_DP ? (from+to)/2 : -1;
+  st.fifty = (pc===P||cap!==0) ? 0 : st.fifty+1;
+  h^=Z_CASTLE[st.castle]; if(st.ep>=0) h^=Z_EP[st.ep];
+  st.side=-side; h^=Z_SIDE;
+  st.hash=h;
+}
+function unmake(st){
+  const rec=st.hist.pop(); if(!rec) return;
+  const mv=rec.mv, from=mFrom(mv), to=mTo(mv), pc=mPc(mv), fl=mFl(mv);
+  const side=-st.side; st.side=side;
+  const bd=st.board;
+  bd[from]= (fl&F_PR) ? P*side : pc*side;
+  bd[to]=0;
+  if(rec.cap!==0&&rec.cap!==OFF){ const cs= fl===F_EP ? (side===1? to+10 : to-10) : to; bd[cs]=rec.cap; }
+  if(pc===K){ st.king[side===1?0:1]=from;
+    if(fl===F_CA){ if(to===97){bd[98]=R;bd[96]=0;} if(to===93){bd[91]=R;bd[94]=0;}
+                   if(to===27){bd[28]=-R;bd[26]=0;} if(to===23){bd[21]=-R;bd[24]=0;} } }
+  st.castle=rec.castle; st.ep=rec.ep; st.fifty=rec.fifty; st.hash=rec.hash;
+}
+function genLegal(st){
+  const out=[], side=st.side;
+  for(const mv of genMoves(st,false)){
+    make(st,mv);
+    if(!inCheck(st,side)) out.push(mv);
+    unmake(st);
+  }
+  return out;
+}
+
+/* ============ 评估：子力 + 位置表 + 象对 + 先手 ============ */
+function evaluate(st){
+  const bd=st.board; let mat=0, pos=0, wb=0, bb=0, npw=0, npb=0;
+  for(let i=0;i<64;i++){ const m=SQ64TO120[i], p=bd[m]; if(p===0) continue;
+    const ap=p>0?p:-p, v=VALUE[ap];
+    if(p>0){ mat+=v; if(ap!==K) pos+=PSTS[ap][i];
+      if(ap===B) wb++; if(ap!==P&&ap!==K) npw+=v; }
+    else { mat-=v; if(ap!==K) pos-=PSTS[ap][i^56];
+      if(ap===B) bb++; if(ap!==P&&ap!==K) npb+=v; }
+  }
+  if(wb>=2) mat+=30; if(bb>=2) mat-=30;
+  const end = npw<1300&&npb<1300;
+  const KT = end?PST_KE:PST_KM;
+  for(let i=0;i<64;i++){ const p=bd[SQ64TO120[i]];
+    if(p===K) pos+=KT[i];
+    else if(p===-K) pos-=KT[i^56];
+  }
+  return (mat+pos)*(st.side===1?1:-1) + 10; /* 引擎视角（行棋方） */
+}
+
+/* ============ 搜索：迭代加深 + PVS + 静态搜索 + 置换表 ============ */
+const TT_SIZE=1<<20, TT_MASK=TT_SIZE-1;
+const ttKey=new Int32Array(TT_SIZE), ttDepth=new Int8Array(TT_SIZE),
+      ttFlag=new Int8Array(TT_SIZE), ttScore=new Int32Array(TT_SIZE), ttMove=new Int32Array(TT_SIZE);
+const TT_EXACT=0, TT_LOWER=1, TT_UPPER=2;
+let nodes=0, qnodes=0, stopAt=0, aborted=false, killers, history2;
+
+function orderMoves(st,mvs,ttmv,ply){
+  const out=mvs.slice();
+  const score=m=>{
+    if(m===ttmv) return 1e9;
+    let s=0;
+    const tp=st.board[mTo(m)];
+    if(tp!==0||mFl(m)===F_EP){
+      const victim= mFl(m)===F_EP?P:(tp>0?tp:-tp);
+      s=1e6+VALUE[victim]*16-VALUE[Math.abs(st.board[mFrom(m)])];
+    }
+    if(mPc(m)===Q&&(mFl(m)&F_PR)) s+=5e5;
+    if(killers[ply][0]===m||killers[ply][1]===m) s+=3e5;
+    return s+history2[mFrom(m)][mTo(m)];
+  };
+  out.sort((a,b)=>score(b)-score(a));
+  return out;
+}
+
+function quiesce(st,alpha,beta){
+  nodes++; qnodes++;
+  if((nodes&2047)===0&&Date.now()>stopAt){ aborted=true; return alpha; }
+  const stand=evaluate(st);
+  if(stand>=beta) return beta;
+  if(stand>alpha) alpha=stand;
+  const side=st.side;
+  for(const m of orderMoves(st,genMoves(st,true),0,0)){
+    const victim= mFl(m)===F_EP?P:Math.abs(st.board[mTo(m)]);
+    if(stand+VALUE[victim]+200<alpha) continue;            /* delta 剪枝 */
+    make(st,m);
+    if(inCheck(st,side)){ unmake(st); continue; }
+    const v=-quiesce(st,-beta,-alpha);
+    unmake(st);
+    if(aborted) return alpha;
+    if(v>=beta) return beta;
+    if(v>alpha) alpha=v;
+  }
+  return alpha;
+}
+
+function ab(st,depth,alpha,beta,ply){
+  if(aborted) return alpha;
+  nodes++;
+  if((nodes&2047)===0&&Date.now()>stopAt){ aborted=true; return alpha; }
+  const chk=inCheck(st,st.side);
+  if(chk) depth++;                                          /* 检查扩展（原版统计项之一） */
+  if(depth<=0) return quiesce(st,alpha,beta);
+  const key=st.hash&TT_MASK;
+  let ttmv=0;
+  if(ttKey[key]===st.hash&&ply>0){
+    ttmv=ttMove[key];
+    if(ttDepth[key]>=depth){
+      const f=ttFlag[key], s=ttScore[key];
+      if(f===TT_EXACT) return s;
+      if(f===TT_LOWER&&s>=beta) return s;
+      if(f===TT_UPPER&&s<=alpha) return s;
+    }
+  }
+  const side=st.side;
+  const moves=orderMoves(st,genMoves(st,false),ttmv,ply);
+  let best=-30000, bestMv=0, legal=0, a0=alpha;
+  for(const m of moves){
+    make(st,m);
+    if(inCheck(st,side)){ unmake(st); continue; }
+    legal++;
+    let v;
+    if(legal===1) v=-ab(st,depth-1,-beta,-alpha,ply+1);
+    else{
+      v=-ab(st,depth-1,-alpha-1,-alpha,ply+1);              /* PVS 空窗侦察（对应 ~x 调用） */
+      if(v>alpha&&v<beta) v=-ab(st,depth-1,-beta,-alpha,ply+1); /* 命中才全窗重搜 */
+    }
+    unmake(st);
+    if(aborted) return alpha;
+    if(v>best){ best=v; bestMv=m; }
+    if(v>alpha){
+      alpha=v;
+      if(alpha>=beta){
+        if(st.board[mTo(m)]===0){                           /* killer + history */
+          if(killers[ply][0]!==m){ killers[ply][1]=killers[ply][0]; killers[ply][0]=m; }
+          history2[mFrom(m)][mTo(m)]+=depth*depth;
+        }
+        break;
+      }
+    }
+  }
+  if(legal===0) return chk ? -29000+ply : 0;                /* 将死 / 逼和 */
+  ttKey[key]=st.hash; ttDepth[key]=depth; ttMove[key]=bestMv; ttScore[key]=best;
+  ttFlag[key]= best>=beta?TT_LOWER : best<=a0?TT_UPPER : TT_EXACT;
+  return best;
+}
+
+/* think()：迭代加深，sd 为深度上限（复刻 "sd %d" 命令语义） */
+function think(st,sd,msLimit){
+  nodes=0; qnodes=0; aborted=false;
+  stopAt=Date.now()+msLimit;
+  killers=Array.from({length:64},()=>[0,0]);
+  history2=Array.from({length:128},()=>new Int32Array(128));
+  const t0=Date.now();
+  let bestMv=0, bestScore=0, depthDone=0;
+  const legal=genLegal(st);
+  if(legal.length===0) return null;
+  for(let d=1;d<=sd;d++){
+    let curBest=0, curScore=-30000, alpha=-30000;
+    for(const m of orderMoves(st,legal,bestMv||ttMove[st.hash&TT_MASK],0)){
+      make(st,m);
+      const v=-ab(st,d-1,-30000,-alpha,1);
+      unmake(st);
+      if(aborted) break;
+      if(v>curScore){ curScore=v; curBest=m; if(v>alpha) alpha=v; }
+    }
+    if(aborted) break;
+    if(curBest){ bestMv=curBest; bestScore=curScore; depthDone=d; }
+    if(bestScore>29000-100) break;                          /* 已见必杀 */
+  }
+  if(!bestMv) bestMv=legal[0];
+  const ms=Math.max(1,Date.now()-t0);
+  return { move:bestMv, score:bestScore, depth:depthDone, nodes, qnodes, ms,
+           nps:Math.round(nodes/ms*1000) };
+}
+/* ENGINE-BLOCK-END */
+</script>
+
+<!-- ================================ UI 层 ================================ -->
+<script>
+const START="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+const GLYPH={ "1":"♙","2":"♘","3":"♗","4":"♖","5":"♕","6":"♔",
+              "-1":"♟","-2":"♞","-3":"♝","-4":"♜","-5":"♛","-6":"♚" };
+let st, boardEl, selSq=-1, legalCache=[], gameHashes=[], humanSide=1,
+    level=3, flipped=false, thinking=false, moveRows=[], gameOver=false, hintMove=0;
+
+const LEVELS={ 1:[1,150], 2:[2,400], 3:[3,1000], 4:[4,2500], 5:[5,6000] };
+
+function $(id){ return document.getElementById(id); }
+function log(cls,txt){ const c=$("console");
+  const d=document.createElement("div"); d.className=cls; d.textContent=txt;
+  c.appendChild(d); c.scrollTop=c.scrollHeight; }
+
+function render(){
+  boardEl.innerHTML="";
+  const checkSq = inCheck(st,st.side) ? (st.side===1?st.king[0]:st.king[1]) : -1;
+  const last = st.hist.length ? st.hist[st.hist.length-1].mv : 0;
+  for(let v=0;v<64;v++){
+    const i = flipped ? 63-v : v, m=SQ64TO120[i], p=st.board[m];
+    const sq=document.createElement("div");
+    sq.className="sq "+(((i>>3)+(i%8))%2===0?"light":"dark");
+    if(last&&(m===mFrom(last)||m===mTo(last))) sq.classList.add("last");
+    if(m===selSq) sq.classList.add("sel");
+    if(hintMove&&(m===mFrom(hintMove)||m===mTo(hintMove))) sq.classList.add("hint");
+    if(m===checkSq) sq.classList.add("check");
+    if(p!==0){ const s=document.createElement("span");
+      s.className="pc "+(p>0?"w":"b"); s.textContent=GLYPH[String(p)]; sq.appendChild(s); }
+    for(const lm of legalCache) if(mFrom(lm)===selSq&&mTo(lm)===m){
+      const dot=document.createElement("span");
+      dot.className= (st.board[m]!==0||mFl(lm)===F_EP) ? "ring":"dot";
+      sq.appendChild(dot);
+    }
+    if(flipped ? i%8===7 : i%8===0){ const c=document.createElement("span");
+      c.className="coord rank"; c.textContent=8-(i>>3); sq.appendChild(c); }
+    if(flipped ? (i>>3)===0 : (i>>3)===7){ const c=document.createElement("span");
+      c.className="coord file"; c.textContent="abcdefgh"[i%8]; sq.appendChild(c); }
+    sq.addEventListener("click",()=>onSquare(m));
+    boardEl.appendChild(sq);
+  }
+  $("status").textContent = statusText();
+}
+
+function statusText(){
+  if(gameOver) return "对局结束";
+  if(thinking) return "引擎思考中…";
+  const side = st.side===1?"白":"黑";
+  if(inCheck(st,st.side)) return side+"方行棋 · 将军!";
+  return side+"方行棋"+(st.side===humanSide?"（你）":"（引擎）");
+}
+
+function onSquare(m){
+  if(thinking||gameOver||st.side!==humanSide) return;
+  const mv=legalCache.find(x=>mFrom(x)===selSq&&mTo(x)===m);
+  if(mv){ maybePromote(mv); return; }
+  if(st.board[m]!==0&&(st.board[m]>0)===(humanSide>0)){
+    selSq = selSq===m ? -1 : m;
+    legalCache = genLegal(st);
+  } else { selSq=-1; legalCache=genLegal(st); }
+  render();
+}
+
+function maybePromote(mv){
+  const promos=legalCache.filter(x=>mFrom(x)===mFrom(mv)&&mTo(x)===mTo(mv)&&(mFl(x)&F_PR));
+  if(promos.length<=1){ playMove(mv); return; }
+  const ov=document.createElement("div"); ov.className="promo";
+  const box=document.createElement("div"); box.className="box";
+  for(const pm of promos){
+    const b=document.createElement("button");
+    b.textContent=GLYPH[String(mPc(pm)*humanSide)];
+    b.onclick=()=>{ ov.remove(); playMove(pm); };
+    box.appendChild(b);
+  }
+  ov.appendChild(box); document.querySelector(".board-wrap").appendChild(ov);
+}
+
+function san(mv){
+  const pc=Math.abs(st.board[mFrom(mv)]), to=mTo(mv),
+        cap=st.board[to]!==0||mFl(mv)===F_EP;
+  if(mFl(mv)===F_CA) return (to===83||to===27)?"O-O":"O-O-O";
+  let s="";
+  if(pc!==P){ s=" PNBRQK"[pc];
+    const others=genLegal(st).filter(x=>x!==mv&&Math.abs(st.board[mFrom(x)])===pc
+      &&mTo(x)===to&&mFrom(x)!==mFrom(mv));
+    if(others.length){ const sameFile=others.some(x=>mailbox64[mFrom(x)]%8===mailbox64[mFrom(mv)]%8);
+      s+= sameFile ? (8-(mailbox64[mFrom(mv)]>>3)) : "abcdefgh"[mailbox64[mFrom(mv)]%8]; }
+  }
+  if(cap) s+= (pc===P?"abcdefgh"[mailbox64[mFrom(mv)]%8]:"")+"x";
+  s+=sqName(to);
+  if(mFl(mv)&F_PR) s+="="+" PNBRQK"[mPc(mv)];
+  make(st,mv);
+  if(inCheck(st,st.side)) s+= genLegal(st).length===0?"#":"+";
+  unmake(st);
+  return s;
+}
+
+function playMove(mv){
+  const txt=san(mv), coord=mStr(mv);
+  make(st,mv); gameHashes.push(st.hash);
+  selSq=-1; hintMove=0; legalCache=genLegal(st);
+  addMoveRow(txt);
+  log("tx","> move "+coord);
+  render();
+  if(checkEnd()) return;
+  if(st.side!==humanSide) setTimeout(engineMove,120);
+}
+
+function addMoveRow(txt){
+  const no=Math.floor((st.hist.length-1)/2)+1;
+  if(st.hist.length%2===1) moveRows.push({no,white:txt,black:""});
+  else { const r=moveRows[moveRows.length-1]; r.black=txt; }
+  drawMoves();
+}
+function drawMoves(){
+  const t=$("moves");
+  t.innerHTML="<table>"+moveRows.map(r=>
+    `<tr><td class="no">${r.no}.</td><td>${r.white}</td><td>${r.black}</td></tr>`).join("")+"</table>";
+  t.scrollTop=t.scrollHeight;
+}
+
+function engineMove(){
+  if(gameOver) return;
+  thinking=true; render();
+  const [sd,ms]=LEVELS[level];
+  log("rx",'< sd '+sd+'   # setSearchTime: → "sd %d"（等级=搜索深度）');
+  setTimeout(()=>{
+    const r=think(st,sd,ms);
+    thinking=false;
+    if(!r||!r.move){ render(); checkEnd(); return; }
+    const mate = Math.abs(r.score)>29000-100;
+    /* 控制台复刻 sjeng.ChessEngine 的原版统计输出格式 */
+    log("st",`Depth: ${r.depth}   Score: ${r.score>0?"+":""}${r.score}`+(mate?"  (mate)":""));
+    log("st",`Nodes: ${r.nodes.toLocaleString()} (${(r.qnodes/Math.max(1,r.nodes)*100).toFixed(2)}% qnodes)`);
+    log("st",`NPS: ${r.nps.toLocaleString()}   Time: ${(r.ms/1000).toFixed(2)}s`);
+    log("st",`Material score: ${materialWhite()}   Eval: ${evaluate(st)*(st.side===1?1:-1)}  (white)`);
+    const txt=san(r.move);
+    make(st,r.move); gameHashes.push(st.hash);
+    legalCache=genLegal(st);
+    addMoveRow(txt);
+    log("rx","> move "+mStr(r.move));
+    render();
+    checkEnd();
+  },30);
+}
+function materialWhite(){
+  let s=0; for(let i=0;i<64;i++){ const p=st.board[SQ64TO120[i]];
+    if(p!==0&&Math.abs(p)!==K) s+=VALUE[Math.abs(p)]*(p>0?1:-1); }
+  return s;
+}
+
+function checkEnd(){
+  const legal=genLegal(st);
+  let msg=null;
+  if(legal.length===0){
+    msg = inCheck(st,st.side)
+      ? (st.side===1?"0-1 {Black Mates}":"1-0 {White Mates}")   /* 原版字符串 */
+      : "1/2-1/2 {Draw}";                                        /* 逼和 */
+  } else if(st.fifty>=100) msg="1/2-1/2 {Draw}";                 /* 50 回合 */
+  else if(gameHashes.filter(h=>h===st.hash).length>=3) msg="1/2-1/2 {Draw}"; /* 三次重复 */
+  else {
+    let pieces=0,bm=0;
+    for(let i=0;i<64;i++){ const p=st.board[SQ64TO120[i]];
+      if(p!==0&&Math.abs(p)!==K){ pieces++; if(Math.abs(p)===B) bm++; } }
+    if(pieces===0||(pieces===1&&bm===1)) msg="1/2-1/2 {Draw}";   /* 子力不足 */
+  }
+  if(msg){
+    gameOver=true;
+    log("st",msg);
+    const bn=document.createElement("div"); bn.className="banner";
+    const ms=document.createElement("div"); ms.className="msg"; ms.textContent=msg;
+    bn.appendChild(ms); document.querySelector(".board-wrap").appendChild(bn);
+    bn.addEventListener("click",()=>bn.remove());
+    render();
+    return true;
+  }
+  return false;
+}
+
+function showHint(){
+  if(thinking||gameOver||st.side!==humanSide) return;
+  const r=think(st,Math.max(2,LEVELS[level][0]),800);
+  if(r&&r.move){
+    hintMove=r.move;
+    log("st","Hint: "+san(r.move)+"  (引擎建议 · 深度 "+r.depth+")");
+    render();
+  }
+}
+
+function openTutorial(){
+  const oldOv=document.querySelector(".tut-overlay"); if(oldOv) oldOv.remove();
+  const ov=document.createElement("div"); ov.className="tut-overlay";
+  const box=document.createElement("div"); box.className="tut-box";
+  box.innerHTML = `
+    <h2>国际象棋 · 规则与提示</h2>
+    <h3>🎯 目标</h3>
+    <p>白先黑后轮流走子。把对方的王<b>将死</b>（王被攻击且无处可逃）即获胜。</p>
+    <h3>♟ 六种棋子的走法</h3>
+    <table>
+      <tr><td>♔</td><td><b>王</b> — 每步一格，横竖斜均可。最重要的子，被将死即输棋。</td></tr>
+      <tr><td>♕</td><td><b>后</b> — 横、竖、斜任意距离，威力最大（≈9 兵）。</td></tr>
+      <tr><td>♖</td><td><b>车</b> — 横、竖任意距离（≈5 兵）。</td></tr>
+      <tr><td>♗</td><td><b>象</b> — 斜线任意距离，终生只走同色格（≈3 兵）。</td></tr>
+      <tr><td>♘</td><td><b>马</b> — 走“日”字，唯一能越子的棋子（≈3 兵）。</td></tr>
+      <tr><td>♙</td><td><b>兵</b> — 向前直走一格（首步可两格），斜前方吃子；到底线必须<b>升变</b>（几乎总是升后）。</td></tr>
+    </table>
+    <h3>⚡ 三条特殊规则</h3>
+    <ul>
+      <li><b>王车易位</b>：王向车横移两格、车跳到王另一侧的一步复合棋。条件：王与该车位未动过、之间无子、王不在将军且不经过被攻击的格。记谱 O-O（短）/ O-O-O（长）。</li>
+      <li><b>吃过路兵</b>：对方兵刚走两格、与你兵并排时，下一步可斜进吃掉它（本游戏按正常斜吃走法即可触发）。</li>
+      <li><b>兵升变</b>：兵到达对方底线时升变为后/车/象/马（弹出选择框）。</li>
+    </ul>
+    <h3>🏁 胜负与和棋</h3>
+    <ul>
+      <li><b>将军 / 将死</b>：王被攻击即“将军”。解将只有三条路：走王、垫子、吃掉攻击子；三条都无路即“将死”。棋盘上王格的红色光晕表示你正被将军。</li>
+      <li><b>逼和</b>：轮走方无任何合法着法且王未被将军 → 判和。</li>
+      <li>其他和棋：同局面三次重复、连续 50 回合无吃子无兵动、双方子力不足以将死。</li>
+    </ul>
+    <h3>💡 下棋提示</h3>
+    <ul>
+      <li><b>开局三原则</b>：抢占中心（e4/d4/e5/d5）；尽快出动马、象；尽早王车易位。</li>
+      <li><b>避免</b>：来回重复走同一个子；过早出后送吃；无保护地送子。</li>
+      <li><b>每步自问</b>：对方上一步在威胁什么？我这一步之后有子失保护吗？</li>
+      <li><b>常见战术</b>：捉双（一子同时攻两目标）、牵制（攻击挡在王前的子）、闪击（前面的子移开露出后面的攻击）。</li>
+      <li><b>残局</b>：王要主动参战；通路兵价值巨大；多算一步杀。</li>
+    </ul>
+    <h3>🎮 本游戏专属</h3>
+    <ul>
+      <li><b>等级 = 引擎搜索深度 (sd)</b>：1 快棋 → 5 大师，新手建议 2–3 级。</li>
+      <li><b>💡 提示按钮</b>：让引擎替你算一步，蓝色框高亮建议着法。</li>
+      <li><b>引擎控制台</b>：每步显示搜索统计（节点数/qnodes/NPS），格式复刻自原版 Sjeng 引擎的输出。</li>
+    </ul>`;
+  const close=document.createElement("button"); close.className="tut-close"; close.textContent="关闭 ✕";
+  close.onclick=()=>ov.remove();
+  box.appendChild(close);
+  ov.appendChild(box);
+  ov.addEventListener("click",e=>{ if(e.target===ov) ov.remove(); });
+  document.body.appendChild(ov);
+  box.scrollTop=0;
+}
+
+function newGame(asBlack){
+  st=loadFEN(START);
+  humanSide = asBlack ? -1 : 1;
+  flipped = asBlack;
+  selSq=-1; hintMove=0; legalCache=genLegal(st); gameHashes=[st.hash];
+  moveRows=[]; gameOver=false; thinking=false;
+  document.querySelectorAll(".banner,.promo").forEach(e=>e.remove());
+  log("st","— 新对局 — 你执"+(humanSide===1?"白":"黑")+"，引擎等级 "+level+" (sd "+LEVELS[level][0]+")");
+  render();
+  if(st.side!==humanSide) setTimeout(engineMove,300);
+}
+
+function takeback(){
+  if(thinking||!st.hist.length) return;
+  let n = st.side===humanSide ? 2 : 1;
+  while(n--&&st.hist.length){ unmake(st); gameHashes.pop(); }
+  gameOver=false; selSq=-1;
+  document.querySelectorAll(".banner").forEach(e=>e.remove());
+  moveRows=[];
+  for(let i=0;i<st.hist.length;i++){
+    const mv=st.hist[i].mv;
+    /* 简化重建：只显示坐标记法，足够悔棋后的视觉回溯 */
+    if(i%2===0) moveRows.push({no:i/2+1,white:mStr(mv),black:""});
+    else moveRows[moveRows.length-1].black=mStr(mv);
+  }
+  drawMoves();
+  legalCache=genLegal(st);
+  log("st","— 悔棋 —");
+  render();
+  if(st.side!==humanSide&&!gameOver) setTimeout(engineMove,200);
+}
+
+window.addEventListener("DOMContentLoaded",()=>{
+  boardEl=document.createElement("div"); boardEl.className="board";
+  document.querySelector(".board-wrap").appendChild(boardEl);
+  $("newWhite").onclick=()=>newGame(false);
+  $("newBlack").onclick=()=>newGame(true);
+  $("undo").onclick=takeback;
+  $("flip").onclick=()=>{ flipped=!flipped; render(); };
+  $("tutor").onclick=openTutorial;
+  $("hint").onclick=showHint;
+  $("level").onchange=e=>{ level=+e.target.value; log("st","— 等级 → "+level+" (sd "+LEVELS[level][0]+") —"); };
+  document.querySelectorAll(".theme-dot").forEach(b=>b.onclick=()=>{
+    document.body.className= b.dataset.t==="wood"?"":("theme-"+b.dataset.t);
+  });
+  log("st","Web Chess — 引擎复刻自 macOS Chess.app 内嵌的 Sjeng 11.2");
+  log("st","架构对应：UI ⇄ 文本协议(sd/move) ⇄ 搜索引擎（迭代加深+PVS+静态搜索+置换表）");
+  newGame(false);
+});
+</script>
+
+<div class="app">
+  <div class="board-wrap"></div>
+  <div class="side">
+    <div class="card"><h3>Status · 行棋状态</h3>
+      <div id="status">—</div>
+      <div class="status-sub">点击棋子行棋；等级=引擎搜索深度(sd)</div>
+    </div>
+    <div class="card"><h3>Controls · 控制</h3>
+      <div class="row" style="margin-bottom:8px">
+        <button id="newWhite" class="primary">新对局 · 执白</button>
+        <button id="newBlack">新对局 · 执黑</button>
+        <button id="undo">悔棋</button>
+        <button id="flip">翻转</button>
+        <button id="hint">💡 提示</button>
+      </div>
+      <div class="row">
+        <label>等级
+          <select id="level">
+            <option value="1">1 · 快棋 (sd 1)</option>
+            <option value="2">2 · 入门 (sd 2)</option>
+            <option value="3" selected>3 · 俱乐部 (sd 3)</option>
+            <option value="4">4 · 专家 (sd 4)</option>
+            <option value="5">5 · 大师 (sd 5)</option>
+          </select>
+        </label>
+        <button id="tutor">📖 规则教学</button>
+        <span style="flex:1"></span>
+        <button class="theme-dot wood"   data-t="wood"   title="木材"></button>
+        <button class="theme-dot marble" data-t="marble" title="大理石"></button>
+        <button class="theme-dot metal"  data-t="metal"  title="金属"></button>
+      </div>
+    </div>
+    <div class="card"><h3>Engine Console · 引擎控制台（复刻原版输出）</h3>
+      <div id="console"></div>
+    </div>
+    <div class="card"><h3>Moves · 着法记录</h3>
+      <div id="moves"></div>
+    </div>
+    <footer>
+      引擎层复刻自 /System/Applications/Chess.app 内嵌的 Sjeng 11.2（GPL），
+      逆向调查证据见 ai_session_REA项目逻辑与使用方法_20261016/结案报告_国际象棋调查.md。<br>
+      sd=搜索深度（对应原版 setSearchTime: 发送的 "sd %d"）；统计行格式对应引擎
+      printf("Nodes: %d (%0.2f%% qnodes)…") 等原版输出。
+    </footer>
+  </div>
+</div>
+
+</body>
+</html>
